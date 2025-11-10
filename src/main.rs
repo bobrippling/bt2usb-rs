@@ -3,6 +3,7 @@
 
 use cyw43_pio::PioSpi;
 use defmt::{unwrap, info};
+use embassy_futures::join::join;
 use embassy_time::{Timer, Duration};
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
@@ -10,7 +11,6 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
 use static_cell::StaticCell;
-//use trouble_example_apps::ble_bas_central;
 use trouble_host::{
     prelude::{
         ExternalController,
@@ -51,12 +51,6 @@ async fn main(spawner: Spawner) {
 
     #[cfg(not(feature = "skip-cyw43-firmware"))]
     let (fw, clm, btfw) = {
-        // IMPORTANT
-        //
-        // Download and make sure these files from https://github.com/embassy-rs/embassy/tree/main/cyw43-firmware
-        // are available in `./examples/rp-pico-w`. (should be automatic)
-        //
-        // IMPORTANT
         let fw = include_bytes!("43439A0.bin");
         let clm = include_bytes!("43439A0_clm.bin");
         let btfw = include_bytes!("43439A0_btfw.bin");
