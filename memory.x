@@ -15,3 +15,15 @@ MEMORY {
     /* SCRATCH_A: ORIGIN = 0x20040000, LENGTH = 4K    */
     /* SCRATCH_B: ORIGIN = 0x20041000, LENGTH = 4K    */
 }
+
+
+/* FORGOT THIS LOL */
+EXTERN(BOOT2_FIRMWARE)
+
+SECTIONS {
+    /* ### Boot loader */
+    .boot2 ORIGIN(BOOT2) :
+    {
+        KEEP(*(.boot2));
+    } > BOOT2
+} INSERT BEFORE .text;
