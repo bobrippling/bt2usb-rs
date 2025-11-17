@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use bt_hci::cmd::le::LeExtCreateConn;
+use bt_hci::controller::ControllerCmdAsync;
 use bt_hci::param::AddrKind;
 use cyw43_pio::PioSpi;
 use defmt::{debug, error, info, unwrap, Format};
@@ -22,7 +24,7 @@ use bt_hci::{
 };
 use trouble_host::gatt::GattClient;
 use trouble_host::prelude::{
-    AdStructure, Central, Characteristic, ConnectConfig, ConnectParams, EventHandler, ScanConfig, Uuid
+    AdStructure, Central, Characteristic, ConnectConfig,/* ConnectParams,*/ EventHandler, ScanConfig, Uuid
 };
 use trouble_host::scan::Scanner;
 use trouble_host::Stack;
@@ -50,7 +52,7 @@ use defmt_rtt as _;
 use panic_probe as _;
 //use embassy_time as _;
 
-const CONNECTIONS_MAX: usize = 1;
+const CONNECTIONS_MAX: usize = 2; // connection and space for scanning??
 
 const L2CAP_CHANNELS_MAX: usize = 3; // Signal + att + CoC
 
@@ -63,7 +65,8 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     let watchdog = embassy_rp::watchdog::Watchdog::new(p.WATCHDOG);
-    unwrap!(spawner.spawn(dinner_time(watchdog)));
+    //unwrap!();
+    spawner.spawn(unwrap!(dinner_time(watchdog)));
 
     #[cfg(feature = "skip-cyw43-firmware")]
     let (fw, clm, btfw) = (&[], &[], &[]);
@@ -100,7 +103,7 @@ async fn main(spawner: Spawner) {
         fw,
         btfw
     ).await;
-    unwrap!(spawner.spawn(cyw43_task(runner)));
+    spawner.spawn(unwrap!(cyw43_task(runner)));
     control.init(clm).await;
     let controller = ExternalController::<_, 10>::new(bt_device);
 
@@ -127,13 +130,17 @@ async fn run<C>(
 )
 where C: Controller,
       C: ControllerCmdSync<LeSetScanParams>,
+      C: ControllerCmdAsync<LeExtCreateConn>,
       <C as embedded_io::ErrorType>::Error: Format,
 {
     let address: Address = Address::random([0xff, 0x8f, 0x1b, 0x05, 0xe4, 0xfe]); // TODO
     info!("using address = {:?}", address);
 
     let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> = HostResources::new();
-    let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+    let stack = trouble_host::new(controller, &mut resources)
+        .set_random_address(address)
+        .set_random_generator_seed(&mut embassy_rp::clocks::RoscRng);
+
     let Host {
         mut central,
         runner: mut stack_runner,
@@ -292,7 +299,11 @@ impl EventHandler for BleHandler {
                     addr: report.addr,
                 };
 
-                info!("[keyboard] found keyboard: {}", addr);
+                info!(
+                    "[keyboard] found keyboard: {} (kind {})",
+                    addr,
+                    addr_kind_str(addr.kind),
+                );
 
                 if self.channel.try_send(addr).is_err() {
                     error!("couldn't notify about keyboard: channel full");
@@ -321,7 +332,8 @@ async fn connect<'s, C>(
 )
 where
     C: Controller,
-    <C as embedded_io::ErrorType>::Error: Format
+    //C: ControllerCmdAsync<LeExtCreateConn>,
+    <C as embedded_io::ErrorType>::Error: Format,
 {
     #![allow(dead_code)]
 
@@ -350,9 +362,41 @@ where
     info!("connected, securing...");
 
     // FIXME: needs newer trouble-host
-    //conn.request_security();
+    {
+        use trouble_host::prelude::ConnectionEvent;
 
-    info!("connected, creating gatt client...");
+        unwrap!(conn.request_security());
+
+        info!("requested security, waiting response...");
+
+        loop {
+            let ok = match conn.next().await {
+                ConnectionEvent::PairingComplete { security_level, ..} => {
+                    info!("Pairing complete: {:?}", security_level);
+                    true
+                },
+                ConnectionEvent::PairingFailed(err) => {
+                    error!("Pairing failed: {:?}", err);
+                    false
+                },
+                ConnectionEvent::Disconnected { reason } => {
+                    error!("Disconnected: {:?}", reason);
+                    false
+                }
+                evt => {
+                    info!("got unexpected event {}", evt);
+                    continue;
+                }
+            };
+
+            if ok {
+                break;
+            }
+            return;
+        }
+    }
+
+    info!("connected (+secured), creating gatt client...");
 
     let client = unwrap!(GattClient::<_, _, 10>::new(stack, &conn).await);
 
